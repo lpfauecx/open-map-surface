@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <clipPath id="r"><rect width="512" height="512" rx="112"/></clipPath>
+  </defs>
+  <g clip-path="url(#r)">
+    <rect width="512" height="512" fill="#0b6e4f"/>
+    <!-- faint survey grid -->
+    <g stroke="#ffffff" stroke-opacity=".14" stroke-width="6">
+      <path d="M0 160H512M0 288H512M0 416H512M128 0V512M256 0V512M384 0V512"/>
+    </g>
+    <!-- parcel outline -->
+    <path d="M96 352 160 212l132-44 108 76-44 148z" fill="#ffffff" fill-opacity=".16" stroke="#ffffff" stroke-opacity=".7" stroke-width="12" stroke-linejoin="round"/>
+    <!-- pin -->
+    <path d="M256 92c-57 0-100 44-100 100 0 78 100 196 100 196s100-118 100-196c0-56-43-100-100-100z" fill="#ffffff"/>
+    <circle cx="256" cy="192" r="40" fill="#0b6e4f"/>
+  </g>
+</svg>
