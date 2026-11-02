@@ -1,5 +1,7 @@
 # Open Map Surface
 
+**Live:** https://lpfauecx.github.io/open-map-surface/ — open it, then use *Install as an app* (Edge/Chrome) for a desktop icon.
+
 A free, open-source, shareable web map: `index.html` plus a `vendor/` folder of pinned libraries. No API keys, no backend, no build step, no CDN calls. Installs as a desktop or phone app with its own icon.
 
 Built on [Leaflet](https://leafletjs.com) + [OpenStreetMap](https://www.openstreetmap.org), with
@@ -49,7 +51,7 @@ Installed copies update themselves: when you publish a new `index.html`, bump `V
 Two ways:
 
 1. **Share link.** Click *Copy share link*. The whole map is in the URL. Works from any host, including a file opened from disk, as long as the recipient can open the same `index.html` (for example, the GitHub Pages URL below).
-2. **Host it.** Push this folder to a GitHub repository, turn on GitHub Pages (Settings → Pages → Deploy from branch → `main` / root). Any static host works: Netlify, Cloudflare Pages, S3, an internal IIS share.
+2. **Host it.** This repository is published with GitHub Pages from `main` at the Live link above; every push to `main` redeploys within a minute or two. Any static host works too: Netlify, Cloudflare Pages, S3, an internal IIS share.
 
 ## Customize
 
