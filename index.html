@@ -157,6 +157,21 @@ footer.about{padding-block:10px 0;font-size:11.5px;color:var(--muted);line-heigh
 .kv{margin:0;font-size:12px;display:grid;grid-template-columns:auto 1fr;gap:2px 10px;max-height:140px;overflow:auto}
 .kv dt{color:var(--muted);font-family:var(--mono);font-size:11px}
 .kv dd{margin:0;overflow-wrap:anywhere}
+/* portfolio deal cards */
+.deal{min-width:260px;max-width:340px;gap:6px}
+.deal .kv{max-height:none}
+.deal-hd{display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap}
+.deal-hd b{font-size:14px}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:11px;white-space:nowrap;padding:2px 8px;border-radius:999px;background:color-mix(in srgb,var(--sw) 18%,var(--panel));border:1px solid var(--sw)}
+.pill::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--sw)}
+.muted{color:var(--muted);font-size:12px}
+.next{font-size:12.5px;padding:6px 8px;border-radius:6px;background:var(--accent-soft)}
+.next b{font-family:var(--mono);font-size:11px;margin-right:4px}
+.next.soon{background:color-mix(in srgb,var(--warn) 18%,var(--panel));border:1px solid var(--warn)}
+.deal-note{font-size:12.5px;border-left:3px solid var(--line);padding-left:8px;white-space:pre-line}
+.deal-note b{display:block;font:500 10.5px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.feat .legend{display:flex;flex-wrap:wrap;gap:2px 10px;font-size:10.5px;color:var(--muted);font-family:var(--font);white-space:normal}
+.feat .legend i{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--sw);margin-right:4px;vertical-align:middle}
 
 /* floating map controls */
 .fab{position:absolute;z-index:800;display:flex;gap:6px}
@@ -299,6 +314,23 @@ const HEX = /^#[0-9a-f]{6}$/i;
 const safeColor = c => HEX.test(String(c || '')) ? String(c).toLowerCase() : currentColor;
 const safeText = (s, max = 2000) => (typeof s === 'string' ? s : s == null ? '' : String(s)).slice(0, max);
 const RESERVED = new Set(['id','name','notes','color','created','radius','dataset']);
+
+/* Portfolio layers: an imported layer whose features carry a `stage` property is colored by deal stage
+   and gets a deal-card popup instead of the raw attribute table. The data itself never lives in this file. */
+const STAGE = {
+  closed:  { c:'#4f6f63', l:'Closed / owned' },
+  pending: { c:'#2f7d6d', l:'Approved, pending close' },
+  hard:    { c:'#d9822b', l:'Hard money' },
+  dd:      { c:'#d8b62e', l:'Due diligence' },
+  loi:     { c:'#4a7fb5', l:'LOI' },
+  lease:   { c:'#8a6fb0', l:'Lease' },
+  option:  { c:'#b9c7bf', l:'Option' },
+  future:  { c:'#cfd5d0', l:'Future' },
+};
+const stageOf = p => { const s = String((p && (p.stage ?? p.st)) || '').toLowerCase(); return STAGE[s] ? s : null; };
+const fmtMoney = n => { n = +n; if (!Number.isFinite(n)) return ''; return n >= 1e6 ? `$${(n/1e6).toFixed(n >= 1e8 ? 0 : 1)}M` : n >= 1e3 ? `$${(n/1e3).toFixed(0)}K` : `$${n.toFixed(0)}`; };
+const fmtDate = s => { if (!s) return ''; const d = new Date(s + (String(s).length === 10 ? 'T00:00:00' : '')); return isNaN(d) ? String(s) : d.toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' }); };
+const daysUntil = s => { if (!s) return null; const d = new Date(s + 'T00:00:00'); return Math.round((d - new Date().setHours(0,0,0,0)) / 86400000); };
 
 /* ---------------- basemaps & overlays (all free, no key) ---------------- */
 const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
@@ -539,11 +571,19 @@ function addDataset(name, fc, color, visible = true){
   const id = uid(); color = safeColor(color); name = safeText(name, 200) || 'Layer';
   fc = { type:'FeatureCollection', features:toFeatures(fc) };
   const points = [];
+  const portfolio = fc.features.some(f => stageOf(f.properties));
+  const colorFor = f => portfolio && stageOf(f.properties) ? STAGE[stageOf(f.properties)].c : color;
   const geo = L.geoJSON(fc, {
-    style:pathStyle(color),
-    pointToLayer:(f, ll) => L.circleMarker(ll, { radius:6, color:'#fff', weight:1.5, fillColor:color, fillOpacity:.92 }),
-    onEachFeature:(f, l) => { l.bindPopup(() => propsPopup(f, name)); if (f.geometry.type === 'Point') points.push(l); },
+    style:f => Object.assign(pathStyle(colorFor(f)), f.properties && f.properties.approx ? { dashArray:'6,5', fillOpacity:.1 } : {}),
+    pointToLayer:(f, ll) => L.circleMarker(ll, { radius:portfolio ? 8 : 6, color:'#fff', weight:1.5, fillColor:colorFor(f), fillOpacity:.95 }),
+    onEachFeature:(f, l) => {
+      l.bindPopup(() => portfolio && stageOf(f.properties) ? dealCard(f.properties, name) : propsPopup(f, name), { maxWidth:360 });
+      const nm = f.properties && (f.properties.name || f.properties.Name || f.properties.title);
+      if (nm) l.bindTooltip(String(nm), { direction:'top', className:'oms-tip', sticky:f.geometry.type !== 'Point' });
+      if (f.geometry.type === 'Point') points.push(l);
+    },
   });
+  const stages = portfolio ? [...new Set(fc.features.map(f => stageOf(f.properties)).filter(Boolean))] : [];
   let bounds = null; try { bounds = geo.getBounds(); } catch {}
   let layer = geo;
   if (points.length > 60 && L.markerClusterGroup){
@@ -553,9 +593,31 @@ function addDataset(name, fc, color, visible = true){
     layer = L.layerGroup([geo, cluster]);
   }
   if (visible) layer.addTo(map);
-  datasets.push({ id, name, fc, layer, visible, color, bounds, count:fc.features.length });
+  datasets.push({ id, name, fc, layer, visible, color, bounds, count:fc.features.length, stages });
   renderList(); save();
   return datasets[datasets.length - 1];
+}
+function dealCard(p, dsName){
+  const s = stageOf(p); const row = (k, v) => v ? `<dt>${k}</dt><dd>${v}</dd>` : '';
+  const place = [p.address, [p.city, p.county && `${p.county} Co.`, p.state].filter(Boolean).join(', ')].filter(Boolean).join(' · ');
+  const days = daysUntil(p.nextDate); const soon = days != null && days <= 30;
+  const price = p.price ? fmtMoney(p.price) + (p.acres ? ` <span class="muted">(${fmtMoney(p.price / p.acres)}/ac)</span>` : '') + (p.priceNote ? `<br><span class="muted">${esc(p.priceNote)}</span>` : '') : (p.priceNote ? esc(p.priceNote) : '');
+  const emd = p.emd ? fmtMoney(p.emd) + (p.emdNote ? `<br><span class="muted">${esc(p.emdNote)}</span>` : '') : (p.emdNote ? esc(p.emdNote) : '');
+  return `<div class="editor deal">
+    <div class="deal-hd"><b>${esc(p.name || p.id || 'Deal')}</b><span class="pill" style="--sw:${STAGE[s].c}">${STAGE[s].l}</span></div>
+    <div class="muted mono">${esc([p.id, p.landStatus, p.lead && `lead ${p.lead}`].filter(Boolean).join(' · '))}</div>
+    ${place ? `<div class="muted">${esc(place)}</div>` : ''}
+    <dl class="kv">
+      ${row('Seller', esc(p.seller))}
+      ${row('Size', [p.acres && `${(+p.acres).toLocaleString(undefined, { maximumFractionDigits:1 })} ac`, p.mw && `${p.mw} MW`].filter(Boolean).join(' · '))}
+      ${row('Price', price)}
+      ${row('Deposit', emd)}
+      ${row('LOI', fmtDate(p.loi))}${row('PSA', fmtDate(p.psa))}${row('IP ends', fmtDate(p.ipEnd))}${row('Exclusivity', fmtDate(p.excl))}${row('Closing', fmtDate(p.closing))}
+    </dl>
+    ${p.nextDate ? `<div class="next${soon ? ' soon' : ''}"><b>${days < 0 ? `${-days}d ago` : days === 0 ? 'Today' : `In ${days}d`} · ${fmtDate(p.nextDate)}</b> ${esc(p.nextLabel || '')}</div>` : ''}
+    ${p.status ? `<div class="deal-note"><b>Status${p.notesDate ? ` · ${fmtDate(p.notesDate)}` : ''}</b>${esc(p.status)}</div>` : ''}
+    ${p.next ? `<div class="deal-note"><b>Next</b>${esc(p.next)}</div>` : ''}
+    <div class="hint" style="margin:0">${esc(dsName)} · read-only layer</div></div>`;
 }
 function propsPopup(f, dsName){
   const p = f.properties || {}; const rows = Object.entries(p).filter(([,v]) => v != null && v !== '');
@@ -564,7 +626,8 @@ function propsPopup(f, dsName){
 function importGeo(gj, name, { color } = {}){
   const feats = toFeatures(gj);
   if (!feats.length){ toast(`No features found in ${name}`); return 0; }
-  if (feats.length > MAX_EDITABLE){ const d = addDataset(name, { type:'FeatureCollection', features:feats }, color); if (d.bounds && d.bounds.isValid()) map.fitBounds(d.bounds, { padding:[30,30] }); }
+  const portfolio = feats.some(f => stageOf(f.properties));           // stage-coded files always load as a styled read-only layer
+  if (portfolio || feats.length > MAX_EDITABLE){ const d = addDataset(name, { type:'FeatureCollection', features:feats }, color); if (d.bounds && d.bounds.isValid()) map.fitBounds(d.bounds, { padding:[30,30] }); }
   else { addEditable(feats); renderList(); save(); fitAll(); }
   return feats.length;
 }
@@ -695,7 +758,7 @@ function renderList(){
       <button class="icon" data-act="edit" title="Rename / details"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h4l10-10-4-4L4 16z"/></svg></button>
       <button class="icon" data-act="del" title="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg></button></li>`; });
   const ds = datasets.map(d => `<li class="feat${d.visible ? '' : ' hidden-ds'}" data-ds="${d.id}"><span class="dot" style="--sw:${d.color}"></span>
-      <button class="name" data-act="zoom" title="Zoom to layer"><b>${esc(d.name)}</b><span>${d.count} features · read-only layer</span></button>
+      <button class="name" data-act="zoom" title="Zoom to layer"><b>${esc(d.name)}</b><span>${d.count} features · read-only layer</span>${d.stages && d.stages.length ? `<span class="legend">${d.stages.map(s => `<i style="--sw:${STAGE[s].c}"></i>${STAGE[s].l}`).join('')}</span>` : ''}</button>
       <button class="icon" data-act="vis" title="${d.visible ? 'Hide' : 'Show'}">${d.visible
         ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>'
         : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3l18 18M10.6 10.6A3 3 0 0 0 13.4 13.4M9.9 5.2A10 10 0 0 1 22 12s-1.3 2.3-3.6 4.2M6.2 6.2C3.4 8.1 2 12 2 12s4 7 10 7c1.5 0 2.9-.3 4.1-.8"/></svg>'}</button>
