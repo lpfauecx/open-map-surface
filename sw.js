@@ -1,7 +1,7 @@
 /* Open Map Surface service worker.
    Caches the app shell (page, vendored libraries, icons) so the installed app opens offline.
    Map tiles and place search are never cached: they stay live and follow each provider's usage policy. */
-const VERSION = 'oms-v2';
+const VERSION = 'oms-v3';
 const SHELL = [
   './', './index.html', './manifest.webmanifest',
   './vendor/leaflet/leaflet.min.js', './vendor/leaflet/leaflet.min.css',
@@ -27,7 +27,8 @@ self.addEventListener('fetch', e => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;           // tiles, search: straight to the network, never cached
   if (req.mode === 'navigate'){                               // the page itself: network first, cached shell when offline
-    e.respondWith(fetch(req).then(r => { const copy = r.clone(); caches.open(VERSION).then(c => c.put('./index.html', copy)); return r; })
+    // cache:'no-cache' revalidates with the server (ETag) instead of trusting the host's max-age, so a new deploy shows on the next open
+    e.respondWith(fetch(req, { cache:'no-cache' }).then(r => { const copy = r.clone(); caches.open(VERSION).then(c => c.put('./index.html', copy)); return r; })
       .catch(() => caches.match('./index.html')));
     return;
   }

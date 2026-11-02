@@ -337,6 +337,13 @@ function setBasemap(key){
   if (baseLayer) map.removeLayer(baseLayer);
   baseLayer = L.tileLayer(cfg.url, { maxZoom:cfg.maxZoom || 19, subdomains:cfg.subdomains || 'abc', attribution:cfg.attribution || '', zIndex:0, crossOrigin:true });
   baseLayer.setOpacity(+$('#baseOpacity').value);
+  // Some networks are blocked by OpenStreetMap's volunteer tile servers (HTTP 403, "tile usage policy").
+  // If the first tiles fail and none load, fall back to Carto Light, which has the same data on a commercial CDN.
+  if (key === 'osm'){
+    let errors = 0, loads = 0; const self = baseLayer;
+    self.on('tileload', () => { loads++; });
+    self.on('tileerror', () => { if (++errors >= 4 && loads === 0 && baseLayer === self){ setBasemap('light'); toast('OpenStreetMap tiles are blocked from this network. Switched to Carto Light (same map data).', 6000); } });
+  }
   baseLayer.addTo(map);
   currentBase = key; $('#basemap').value = key; save();
 }
