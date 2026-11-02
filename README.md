@@ -78,7 +78,7 @@ What the page does and does not do:
 - **No server, no accounts.** Drawings autosave to this browser's local storage only, unencrypted. Anyone who can log in to your Windows profile can read them.
 - **No third-party scripts at runtime.** Leaflet, Geoman, MarkerCluster, Turf and lz-string are bundled under `vendor/` at pinned versions, so a CDN outage or compromise cannot touch the page. System fonts only.
 - **Share links are compressed, not encrypted.** Anyone holding a link can decode every shape, name and note. Treat a link like the GeoJSON file itself. The data sits in the URL fragment, which browsers never send to servers.
-- **Tile providers see what you look at.** Every pan and zoom requests tiles by coordinate from the basemap provider (OSM, Carto, Esri, USGS, FEMA, OpenRailwayMap) together with your IP address. A `no-referrer` policy keeps the page URL out of those requests. For confidential work, self-host tiles or route them through a proxy.
+- **Tile providers see what you look at.** Every pan and zoom requests tiles by coordinate from the basemap provider (OSM, Carto, Esri, USGS, FEMA, OpenRailwayMap) together with your IP address. Tile requests carry only the site origin as Referer (OpenStreetMap requires one and blocks requests without it); the page path and the share-link fragment are never sent. For confidential work, self-host tiles or route them through a proxy.
 - **Privacy mode** (Share section) turns off place search (Nominatim) and the Google Maps link, so the only outbound traffic is tiles.
 - **Untrusted input is sanitized.** Names, notes and imported attributes are HTML-escaped; colors must be a 6-digit hex; share links are rejected above 250 KB or 20,000 features; map views and basemap keys are validated before use.
 

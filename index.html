@@ -5,7 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Open Map Surface</title>
 <meta name="description" content="A free, open-source, shareable web map: draw, measure, import, export and share by link. Leaflet + OpenStreetMap, no API keys, no backend.">
-<meta name="referrer" content="no-referrer">
+<!-- Origin-only referrer: OpenStreetMap's tile servers reject requests with no Referer at all, and the origin
+     (https://host/) reveals nothing about the map: the path never changes and the fragment is never sent. -->
+<meta name="referrer" content="strict-origin-when-cross-origin">
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#0b6e4f">
 <meta name="mobile-web-app-capable" content="yes">
