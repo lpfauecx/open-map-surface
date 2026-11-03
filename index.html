@@ -175,6 +175,9 @@ footer.about{padding-block:10px 0;font-size:11.5px;color:var(--muted);line-heigh
 .deal-note{font-size:12.5px;border-left:3px solid var(--line);padding-left:8px;white-space:pre-line}
 .deal-note b{display:block;font:500 10.5px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .feat .legend{display:flex;flex-wrap:wrap;gap:2px 10px;font-size:10.5px;color:var(--muted);font-family:var(--font);white-space:normal}
+.legend-row{display:flex;flex-wrap:wrap;gap:2px 10px;font-size:10.5px;color:var(--muted);padding:0 0 4px 23px}
+.legend-row i{display:inline-block;width:14px;height:3px;border-radius:2px;background:var(--sw);margin-right:4px;vertical-align:middle}
+.live-status{margin:0 0 2px 23px}
 .feat .legend i{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--sw);margin-right:4px;vertical-align:middle}
 
 /* floating map controls */
@@ -252,8 +255,10 @@ footer.about{padding-block:10px 0;font-size:11.5px;color:var(--muted);line-heigh
       <select id="basemap" aria-label="Basemap"></select>
       <div class="slider"><span>Opacity</span><input id="baseOpacity" type="range" min="0.2" max="1" step="0.05" value="1"></div>
       <div id="overlays" style="margin-top:8px"></div>
-      <label class="check"><input type="checkbox" id="ov-parcels"> County parcels (live)<span class="tag">ArcGIS</span></label>
+      <h2 style="margin-top:12px">Live data <span class="count">public services</span></h2>
+      <label class="check"><input type="checkbox" id="ov-parcels"> County parcels<span class="tag">ArcGIS</span></label>
       <p class="hint" id="parcelStatus" style="margin-top:2px" hidden></p>
+      <div id="liveOverlays"></div>
     </div>
 
     <div class="section">
@@ -366,6 +371,9 @@ const OVERLAYS = {
   // FEMA's NFHL has no working WMS any more; its ArcGIS export endpoint is used per tile. Layer 28 = Flood Hazard Zones, 27 = boundaries.
   // The service only draws these closer than about 1:36,000, so the overlay starts at zoom 13.
   fema:      { name:'FEMA flood hazard zones', tag:'US · zoom 15+', arcgis:'https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer', layers:'28,27', minZoom:15, opacity:.6, attribution:'FEMA NFHL' },
+  nwi:       { name:'Wetlands (NWI)', tag:'USFWS · zoom 12+', arcgis:'https://fwspublicservices.wim.usgs.gov/wetlandsmapservice/rest/services/Wetlands/MapServer', layers:'0', minZoom:12, opacity:.65, attribution:'USFWS NWI' },
+  nhd:       { name:'Streams, rivers & waterbodies', tag:'USGS NHD · zoom 10+', arcgis:'https://hydro.nationalmap.gov/arcgis/rest/services/nhd/MapServer', layers:'4,6,7,9,10,12', minZoom:10, opacity:.85, attribution:'USGS NHD' },
+  soils:     { name:'Soil map units', tag:'USDA SSURGO · zoom 14+', wms:'https://SDMDataAccess.nrcs.usda.gov/Spatial/SDM.wms', layers:'mapunitpoly,mapunitline', minZoom:14, opacity:.6, attribution:'USDA NRCS SSURGO' },
 };
 /* Tile layer backed by an ArcGIS MapServer export (one 256px image per tile, Web Mercator). */
 const ArcGISExportLayer = L.TileLayer.extend({
@@ -422,7 +430,7 @@ function setOverlay(key, on){
   const cb = $(`#ov-${key}`); if (cb) cb.checked = !!on;
   save();
 }
-const activeOverlays = () => Object.keys(overlayLayers).concat(parcelsOn ? ['parcels'] : []);
+const activeOverlays = () => Object.keys(overlayLayers).concat(parcelsOn ? ['parcels'] : []).concat(Object.keys(liveState || {}).filter(k => liveState[k].on).map(k => `live:${k}`));
 
 /* ---------------- live county parcels (public ArcGIS REST layers, queried for the current view) ---------------- */
 // Each source: a public FeatureServer/MapServer layer, its rough bbox [w,s,e,n], and which fields hold owner / parcel id / acres / address.
@@ -521,6 +529,80 @@ function parcelPopup(f){
   });
   return el;
 }
+/* ---------------- live vector overlays (public feature services queried for the view) ---------------- */
+const LIVE = {
+  tx: { name:'Transmission lines', tag:'HIFLD', url:'https://services1.arcgis.com/Hp6G80Pky0om7QvQ/arcgis/rest/services/Electric_Power_Transmission_Lines/FeatureServer/0', minZoom:9,
+    fields:['VOLTAGE','VOLT_CLASS','OWNER','STATUS','TYPE','SUB_1','SUB_2'], title:p => `${p.VOLTAGE > 0 ? p.VOLTAGE + ' kV' : p.VOLT_CLASS || 'Transmission line'}${p.OWNER && p.OWNER !== 'NOT AVAILABLE' ? ' · ' + p.OWNER : ''}`,
+    style:p => { const v = +p.VOLTAGE || 0; return { color: v >= 345 ? '#c2185b' : v >= 200 ? '#d9480f' : v >= 100 ? '#b45309' : v > 0 ? '#6b7280' : '#9ca3af', weight: v >= 345 ? 3.5 : v >= 200 ? 2.8 : v >= 100 ? 2 : 1.4, opacity:.9, dashArray: p.STATUS && p.STATUS !== 'IN SERVICE' ? '6,5' : null }; },
+    legend:[['#c2185b','345 kV+'],['#d9480f','200–344 kV'],['#b45309','100–199 kV'],['#6b7280','under 100 kV'],['#9ca3af','unknown']] },
+  sub: { name:'Substations', tag:'HIFLD', url:'https://services6.arcgis.com/OO2s4OoyCZkYJ6oE/arcgis/rest/services/Substations/FeatureServer/0', minZoom:9,
+    fields:['NAME','TYPE','STATUS','MAX_VOLT','MIN_VOLT','LINES','CITY','STATE'], title:p => `${p.NAME || 'Substation'}${p.MAX_VOLT > 0 ? ' · ' + p.MAX_VOLT + ' kV' : ''}`,
+    point:(p, ll) => { const v = +p.MAX_VOLT || 0; return L.circleMarker(ll, { pane:'live', radius: v >= 345 ? 9 : v >= 200 ? 7 : v >= 100 ? 5.5 : 4, color:'#fff', weight:1.5, fillColor: v >= 345 ? '#c2185b' : v >= 200 ? '#d9480f' : v >= 100 ? '#b45309' : '#6b7280', fillOpacity:.95 }); },
+    legend:[['#c2185b','345 kV+'],['#d9480f','200–344 kV'],['#b45309','100–199 kV'],['#6b7280','smaller / unknown']] },
+  gas: { name:'Natural gas pipelines', tag:'EIA', url:'https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/services/Natural_Gas_Interstate_and_Intrastate_Pipelines_1/FeatureServer/0', minZoom:8,
+    fields:['TYPEPIPE','Operator','Status'], title:p => `${p.Operator || 'Gas pipeline'}${p.TYPEPIPE ? ' · ' + p.TYPEPIPE : ''}`,
+    style:p => ({ color: p.TYPEPIPE === 'Interstate' ? '#0e7490' : '#0891b2', weight: p.TYPEPIPE === 'Interstate' ? 2.6 : 1.8, opacity:.9, dashArray:'8,4' }),
+    legend:[['#0e7490','interstate'],['#0891b2','intrastate']] },
+  util: { name:'Electric utility territories', tag:'HIFLD', url:'https://services3.arcgis.com/OYP7N6mAJJCyH6hd/arcgis/rest/services/Electric_Retail_Service_Territories_HIFLD/FeatureServer/0', minZoom:8, max:500,
+    fields:['NAME','TYPE','HOLDING_CO','CNTRL_AREA','CUSTOMERS','TELEPHONE','WEBSITE'], title:p => `${p.NAME || 'Utility'}${p.TYPE ? ' · ' + p.TYPE.toLowerCase() : ''}`,
+    style:p => { let h = 0; for (const c of String(p.NAME || '')) h = (h * 31 + c.charCodeAt(0)) % 360; return { color:`hsl(${h} 45% 40%)`, weight:1.5, opacity:.8, fillColor:`hsl(${h} 55% 55%)`, fillOpacity:.08 }; } },
+};
+map.createPane('live'); map.getPane('live').style.zIndex = 360;      // above county parcels, below drawn shapes
+const liveState = {};   // key -> { on, layer, abort }
+function liveStatus(key, msg){ const el = $(`#live-status-${key}`); if (el){ el.hidden = !msg; el.textContent = msg || ''; } }
+function clearLive(key){ const s = liveState[key]; if (s && s.layer){ map.removeLayer(s.layer); s.layer = null; } }
+async function refreshLive(key){
+  const cfg = LIVE[key], s = liveState[key]; if (!cfg || !s || !s.on || !map._loaded) return;
+  const z = map.getZoom(), b = map.getBounds();
+  if (z < cfg.minZoom){ clearLive(key); liveStatus(key, `Zoom in to ${cfg.minZoom}+ to load ${cfg.name.toLowerCase()}`); return; }
+  if (s.abort) s.abort.abort(); const ctl = s.abort = new AbortController();
+  liveStatus(key, `Loading ${cfg.name.toLowerCase()}…`);
+  const env = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map(n => n.toFixed(6)).join(',');
+  try {
+    const qs = `where=1%3D1&geometry=${env}&geometryType=esriGeometryEnvelope&inSR=4326&outSR=4326&spatialRel=esriSpatialRelIntersects&outFields=${encodeURIComponent(cfg.fields.join(','))}&returnGeometry=true&geometryPrecision=5&resultRecordCount=${cfg.max || 2000}&f=geojson`;
+    const r = await fetch(`${cfg.url}/query?${qs}`, { signal:ctl.signal }); const j = await r.json();
+    if (j.error) throw new Error(j.error.message || 'query error');
+    if (ctl.signal.aborted) return;
+    clearLive(key);
+    const feats = (j.features || []).filter(f => f.geometry);
+    s.layer = L.geoJSON({ type:'FeatureCollection', features:feats }, { pane:'live',
+      style:f => cfg.style ? cfg.style(f.properties || {}) : { color:'#374151', weight:1.5 },
+      pointToLayer:(f, ll) => cfg.point ? cfg.point(f.properties || {}, ll) : L.circleMarker(ll, { pane:'live', radius:5, color:'#fff', weight:1.5, fillColor:'#374151', fillOpacity:.9 }),
+      onEachFeature:(f, l) => { l.bindTooltip(() => cfg.title(f.properties || {}), { className:'oms-tip', sticky:f.geometry.type !== 'Point', direction:'top' }); l.bindPopup(() => livePopup(cfg, f), { maxWidth:320 }); },
+    }).addTo(map);
+    const truncated = j.exceededTransferLimit || (j.properties && j.properties.exceededTransferLimit);
+    liveStatus(key, `${feats.length.toLocaleString()} in view${truncated ? ' · server limit hit, zoom in for all' : ''}`);
+  } catch (e){ if (e.name !== 'AbortError') liveStatus(key, `Could not load: ${e.message}`); }
+}
+function livePopup(cfg, f){
+  const p = f.properties || {}; const el = document.createElement('div'); el.className = 'editor';
+  const rows = cfg.fields.filter(k => p[k] != null && p[k] !== '' && p[k] !== 'NOT AVAILABLE' && p[k] !== -999999).map(k => `<dt>${esc(k.toLowerCase().replace(/_/g, ' '))}</dt><dd>${esc(p[k])}</dd>`).join('');
+  let measure = ''; try { if (f.geometry.type.includes('LineString')) measure = `<dt>segment length</dt><dd>${fmtLen(turf.length(f, { units:'meters' }))}</dd>`; } catch {}
+  el.innerHTML = `<b>${esc(cfg.title(p))}</b><dl class="kv">${rows}${measure}</dl>
+    <div class="ed-actions"><button type="button" class="btn small primary" data-act="add">Add to map</button><button type="button" class="btn small" data-act="copy">Copy GeoJSON</button></div>
+    <div class="hint" style="margin:0">${esc(cfg.name)} · ${esc(cfg.tag)} public data</div>`;
+  el.addEventListener('click', e => {
+    const act = e.target.closest('[data-act]')?.dataset.act; if (!act) return;
+    if (act === 'copy') copy(JSON.stringify(f, null, 2), 'GeoJSON copied');
+    if (act === 'add'){ const notes = cfg.fields.filter(k => p[k] != null && p[k] !== '' && p[k] !== 'NOT AVAILABLE').map(k => `${k}: ${p[k]}`).join(' · ');
+      L.geoJSON(f, { pointToLayer:(ft, ll) => L.marker(ll) }).getLayers().forEach(l => register(l, { name:cfg.title(p), notes:`${notes} · Source: ${cfg.tag}`, color:currentColor }));
+      map.closePopup(); renderList(); save(); toast('Added to the map as an editable shape.'); }
+  });
+  return el;
+}
+function setLive(key, on){
+  const s = liveState[key] = liveState[key] || { on:false, layer:null, abort:null };
+  s.on = !!on; const cb = $(`#ov-live-${key}`); if (cb) cb.checked = s.on;
+  if (!s.on){ if (s.abort) s.abort.abort(); clearLive(key); liveStatus(key, ''); } else refreshLive(key);
+  save();
+}
+$('#liveOverlays').innerHTML = Object.entries(LIVE).map(([k, v]) =>
+  `<label class="check"><input type="checkbox" id="ov-live-${k}"> ${v.name}<span class="tag">${v.tag}</span></label>
+   <p class="hint live-status" id="live-status-${k}" hidden></p>
+   ${v.legend ? `<div class="legend-row" id="live-legend-${k}" hidden>${v.legend.map(([c, l]) => `<span><i style="--sw:${c}"></i>${l}</span>`).join('')}</div>` : ''}`).join('');
+Object.keys(LIVE).forEach(k => $(`#ov-live-${k}`).addEventListener('change', e => { setLive(k, e.target.checked); const lg = $(`#live-legend-${k}`); if (lg) lg.hidden = !e.target.checked; }));
+map.on('moveend zoomend', () => { Object.keys(LIVE).forEach(k => { const s = liveState[k]; if (!s || !s.on) return; clearTimeout(s.timer); s.timer = setTimeout(() => refreshLive(k), 350); }); });
+
 function setParcels(on){
   parcelsOn = !!on; $('#ov-parcels').checked = parcelsOn;
   if (!parcelsOn){ if (parcelAbort) parcelAbort.abort(); clearParcels(); setParcelStatus(''); }
@@ -1119,6 +1201,7 @@ function applySnapshot(s){
     if (v && v.length === 3 && Math.abs(v[0]) <= 90 && Math.abs(v[1]) <= 180 && v[2] >= 0 && v[2] <= 22) map.setView([v[0], v[1]], v[2]); else fitAll();
     if (!map._loaded) map.setView([38, -97], 4);
     setParcels(parcelsOn);
+    Object.keys(LIVE).forEach(k => { const on = ov.includes(`live:${k}`); setLive(k, on); const lg = $(`#live-legend-${k}`); if (lg) lg.hidden = !on; });
   } finally { suppressSave = false; }
   renderList(); save();
 }
