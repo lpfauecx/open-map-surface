@@ -1,7 +1,7 @@
 /* Open Map Surface service worker.
    Caches the app shell (page, vendored libraries, icons) so the installed app opens offline.
    Map tiles and place search are never cached: they stay live and follow each provider's usage policy. */
-const VERSION = 'oms-v9';
+const VERSION = 'oms-v10';
 const SHELL = [
   './', './index.html', './manifest.webmanifest',
   './vendor/leaflet/leaflet.min.js', './vendor/leaflet/leaflet.min.css',
