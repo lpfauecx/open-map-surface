@@ -146,6 +146,7 @@ footer.about{padding-block:10px 0;font-size:11.5px;color:var(--muted);line-heigh
 .leaflet-container a.leaflet-popup-close-button{color:var(--muted)}
 .leaflet-tooltip.oms-tip{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;box-shadow:none;font-size:12px;padding:3px 7px}
 .leaflet-tooltip.oms-tip::before{display:none}
+.leaflet-tile-pane .blend-multiply{mix-blend-mode:multiply}
 .pin{background:transparent;border:0}
 .pin svg{display:block;filter:drop-shadow(0 2px 2px rgba(0,0,0,.35))}
 .cluster{background:transparent;border:0}
@@ -361,9 +362,20 @@ const BASEMAPS = {
 const OVERLAYS = {
   labels:    { name:'Place labels & boundaries', tag:'Esri', url:ESRI+'Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', maxZoom:19 },
   roads:     { name:'Roads & transport', tag:'Esri', url:ESRI+'Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}', maxZoom:19 },
-  hillshade: { name:'Hillshade (terrain)', tag:'Esri', url:ESRI+'Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}', maxZoom:16, opacity:.45 },
-  fema:      { name:'FEMA flood hazard zones', tag:'US · WMS', wms:'https://hazards.fema.gov/gis/nfhl/services/public/NFHL/MapServer/WMSServer', layers:'28', opacity:.55, attribution:'FEMA NFHL' },
+  hillshade: { name:'Hillshade (terrain)', tag:'Esri', url:ESRI+'Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}', maxZoom:16, opacity:.7, blend:'multiply' },
+  // FEMA's NFHL has no working WMS any more; its ArcGIS export endpoint is used per tile. Layer 28 = Flood Hazard Zones, 27 = boundaries.
+  // The service only draws these closer than about 1:36,000, so the overlay starts at zoom 13.
+  fema:      { name:'FEMA flood hazard zones', tag:'US · zoom 15+', arcgis:'https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer', layers:'28,27', minZoom:15, opacity:.6, attribution:'FEMA NFHL' },
 };
+/* Tile layer backed by an ArcGIS MapServer export (one 256px image per tile, Web Mercator). */
+const ArcGISExportLayer = L.TileLayer.extend({
+  getTileUrl(coords){
+    const half = 20037508.342789244, n = Math.pow(2, coords.z), w = 2 * half / n;
+    const xmin = -half + coords.x * w, ymax = half - coords.y * w;
+    const bbox = [xmin, ymax - w, xmin + w, ymax].map(v => v.toFixed(2)).join(',');
+    return `${this.options.base}/export?bbox=${bbox}&bboxSR=3857&imageSR=3857&size=256,256&layers=show:${this.options.layers}&format=png32&transparent=true&dpi=96&f=image`;
+  },
+});
 
 /* ---------------- map ---------------- */
 const map = L.map('map', { zoomControl:false, worldCopyJump:true, doubleClickZoom:false });
@@ -397,9 +409,12 @@ function setBasemap(key){
 function setOverlay(key, on){
   const cfg = OVERLAYS[key]; if (!cfg) return;
   if (on && !overlayLayers[key]){
-    overlayLayers[key] = cfg.wms
-      ? L.tileLayer.wms(cfg.wms, { layers:cfg.layers, format:'image/png', transparent:true, opacity:cfg.opacity ?? 1, attribution:cfg.attribution || '', zIndex:5 })
-      : L.tileLayer(cfg.url, { maxZoom:cfg.maxZoom || 19, opacity:cfg.opacity ?? 1, attribution:cfg.attribution || '', zIndex:5 });
+    const common = { opacity:cfg.opacity ?? 1, attribution:cfg.attribution || '', zIndex:5, maxZoom:20, maxNativeZoom:cfg.maxZoom || 19, minZoom:cfg.minZoom || 0, className:cfg.blend ? `blend-${cfg.blend}` : '' };
+    overlayLayers[key] = cfg.arcgis
+      ? new ArcGISExportLayer('', Object.assign({ base:cfg.arcgis, layers:cfg.layers }, common))
+      : cfg.wms
+      ? L.tileLayer.wms(cfg.wms, Object.assign({ layers:cfg.layers, format:'image/png', transparent:true }, common))
+      : L.tileLayer(cfg.url, common);
     overlayLayers[key].addTo(map);
   } else if (!on && overlayLayers[key]){
     map.removeLayer(overlayLayers[key]); delete overlayLayers[key];

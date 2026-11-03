@@ -11,7 +11,7 @@ Built on [Leaflet](https://leafletjs.com) + [OpenStreetMap](https://www.openstre
 ## What it does
 
 - **Basemaps (keyless):** OpenStreetMap, Esri light and dark canvases, Esri World Street Map, Esri World Imagery (satellite), Esri Topo, OpenTopoMap, USGS Topo and USGS Imagery+Topo. (Carto's basemaps were dropped in Nov 2026 when they began requiring an API key.)
-- **Overlays:** place labels and boundaries, roads, hillshade, FEMA flood hazard zones (US, WMS).
+- **Overlays:** place labels and boundaries, roads, hillshade (blended into the basemap), FEMA flood hazard zones and boundaries (US; drawn through FEMA's NFHL ArcGIS export, which only renders at zoom 15 and closer, so the overlay starts there).
 - **Draw:** pins, lines, areas, rectangles, radius circles. Edit vertices, drag shapes, erase. Eight colors.
 - **Measure:** every shape reports its size in site-work units. Areas in acres and hectares (plus km² when large), lengths in km and miles, pins as decimal degrees.
 - **Import:** GeoJSON, KML, KMZ and CSV (needs `lat`/`lon`-style columns). Drag a file onto the page or click the drop zone. KMZ is unzipped in the browser (no upload). Imports over 400 features load as a clustered read-only layer.
