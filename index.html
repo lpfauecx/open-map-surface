@@ -1030,8 +1030,14 @@ function snapshot(){
   return { v:1, view:[+c.lat.toFixed(5), +c.lng.toFixed(5), map.getZoom()], base:currentBase, overlays:activeOverlays(), baseOpacity:+$('#baseOpacity').value,
     features:drawnFC(), datasets:datasets.map(d => ({ name:d.name, color:d.color, visible:d.visible, fc:d.fc })), seq };
 }
-let saveTimer = null;
-function save(){ if (suppressSave) return; clearTimeout(saveTimer); saveTimer = setTimeout(() => { try { localStorage.setItem(STORE_KEY, JSON.stringify(snapshot())); } catch {} }, 300); }
+let saveTimer = null, lastSaved = '';
+function save(){ if (suppressSave) return; clearTimeout(saveTimer); saveTimer = setTimeout(() => { try { lastSaved = JSON.stringify(snapshot()); localStorage.setItem(STORE_KEY, lastSaved); } catch {} }, 300); }
+// Another window of this map (a browser tab and the installed app, say) saved: adopt its state instead of overwriting it on our next autosave.
+window.addEventListener('storage', e => {
+  if (e.key !== STORE_KEY || !e.newValue || e.newValue === lastSaved) return;
+  if (anyModeOn()) { toast('The map changed in another window. Finish drawing, then reload to see it.', 5000); return; }
+  try { const s = JSON.parse(e.newValue); const c = map.getCenter(), z = map.getZoom(); applySnapshot(Object.assign({}, s, { view:[c.lat, c.lng, z] })); lastSaved = e.newValue; toast('Updated from another window of this map'); } catch {}
+});
 function applySnapshot(s){
   if (!s || typeof s !== 'object') throw new Error('bad snapshot');
   suppressSave = true;
