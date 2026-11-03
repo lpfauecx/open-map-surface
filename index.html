@@ -337,8 +337,11 @@ const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenS
 const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/';
 const BASEMAPS = {
   osm:      { name:'OpenStreetMap', url:'https://tile.openstreetmap.org/{z}/{x}/{y}.png', maxZoom:19, attribution:OSM_ATTR },
-  light:    { name:'Carto Light', url:'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', subdomains:'abcd', maxZoom:20, attribution:OSM_ATTR+' &copy; <a href="https://carto.com/attributions">CARTO</a>' },
-  dark:     { name:'Carto Dark', url:'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', subdomains:'abcd', maxZoom:20, attribution:OSM_ATTR+' &copy; <a href="https://carto.com/attributions">CARTO</a>' },
+  // Carto's basemaps started requiring an API key (they now serve an "API key needed" placeholder tile), so the
+  // light/dark keys point at Esri's keyless canvases instead. The keys stay the same so saved maps and share links still work.
+  light:    { name:'Light canvas (Esri)', url:ESRI+'Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', ref:ESRI+'Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}', maxZoom:16, attribution:'&copy; Esri, HERE, Garmin, OSM contributors' },
+  dark:     { name:'Dark canvas (Esri)', url:ESRI+'Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', ref:ESRI+'Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}', maxZoom:16, attribution:'&copy; Esri, HERE, Garmin, OSM contributors' },
+  streets:  { name:'Esri World Street Map', url:ESRI+'World_Street_Map/MapServer/tile/{z}/{y}/{x}', maxZoom:19, attribution:'&copy; Esri, HERE, Garmin, OSM contributors' },
   imagery:  { name:'Satellite (Esri World Imagery)', url:ESRI+'World_Imagery/MapServer/tile/{z}/{y}/{x}', maxZoom:19, attribution:'Imagery &copy; Esri, Maxar, Earthstar Geographics, GIS User Community' },
   esritopo: { name:'Esri World Topo', url:ESRI+'World_Topo_Map/MapServer/tile/{z}/{y}/{x}', maxZoom:19, attribution:'&copy; Esri, HERE, Garmin, USGS, NGA, OSM contributors' },
   opentopo: { name:'OpenTopoMap', url:'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', maxZoom:17, attribution:OSM_ATTR+', SRTM | &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)' },
@@ -350,7 +353,6 @@ const OVERLAYS = {
   roads:     { name:'Roads & transport', tag:'Esri', url:ESRI+'Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}', maxZoom:19 },
   hillshade: { name:'Hillshade (terrain)', tag:'Esri', url:ESRI+'Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}', maxZoom:16, opacity:.45 },
   fema:      { name:'FEMA flood hazard zones', tag:'US · WMS', wms:'https://hazards.fema.gov/gis/nfhl/services/public/NFHL/MapServer/WMSServer', layers:'28', opacity:.55, attribution:'FEMA NFHL' },
-  railway:   { name:'Railways', tag:'OSM', url:'https://{s}.tiles.openrailwaymap.org/standard/{z}/{x}/{y}.png', maxZoom:19, attribution:'&copy; <a href="https://www.openrailwaymap.org">OpenRailwayMap</a>' },
 };
 
 /* ---------------- map ---------------- */
@@ -359,7 +361,7 @@ L.control.zoom({ position:'topright' }).addTo(map);
 L.control.scale({ position:'bottomright', imperial:true, metric:true }).addTo(map);
 map.attributionControl.setPrefix('<a href="https://leafletjs.com" target="_blank" rel="noopener">Leaflet</a>');
 
-let baseLayer = null, currentBase = 'osm';
+let baseLayer = null, refLayer = null, currentBase = 'osm';
 const overlayLayers = {};
 let currentColor = COLORS[0];
 let suppressSave = false;
@@ -367,14 +369,17 @@ let suppressSave = false;
 function setBasemap(key){
   const cfg = BASEMAPS[key] || BASEMAPS.osm; key = BASEMAPS[key] ? key : 'osm';
   if (baseLayer) map.removeLayer(baseLayer);
-  baseLayer = L.tileLayer(cfg.url, { maxZoom:cfg.maxZoom || 19, subdomains:cfg.subdomains || 'abc', attribution:cfg.attribution || '', zIndex:0, crossOrigin:true });
+  if (refLayer) { map.removeLayer(refLayer); refLayer = null; }
+  const maxNative = cfg.maxZoom || 19;
+  baseLayer = L.tileLayer(cfg.url, { maxZoom:20, maxNativeZoom:maxNative, subdomains:cfg.subdomains || 'abc', attribution:cfg.attribution || '', zIndex:0 });
   baseLayer.setOpacity(+$('#baseOpacity').value);
+  if (cfg.ref){ refLayer = L.tileLayer(cfg.ref, { maxZoom:20, maxNativeZoom:maxNative, zIndex:1 }); refLayer.setOpacity(+$('#baseOpacity').value); refLayer.addTo(map); }
   // Some networks are blocked by OpenStreetMap's volunteer tile servers (HTTP 403, "tile usage policy").
   // If the first tiles fail and none load, fall back to Carto Light, which has the same data on a commercial CDN.
   if (key === 'osm'){
     let errors = 0, loads = 0; const self = baseLayer;
     self.on('tileload', () => { loads++; });
-    self.on('tileerror', () => { if (++errors >= 4 && loads === 0 && baseLayer === self){ setBasemap('light'); toast('OpenStreetMap tiles are blocked from this network. Switched to Carto Light (same map data).', 6000); } });
+    self.on('tileerror', () => { if (++errors >= 4 && loads === 0 && baseLayer === self){ setBasemap('streets'); toast('OpenStreetMap tiles are blocked from this network. Switched to Esri World Street Map.', 6000); } });
   }
   baseLayer.addTo(map);
   currentBase = key; $('#basemap').value = key; save();
@@ -397,7 +402,7 @@ const activeOverlays = () => Object.keys(overlayLayers);
 // panel widgets
 $('#basemap').innerHTML = Object.entries(BASEMAPS).map(([k,v]) => `<option value="${k}">${v.name}</option>`).join('');
 $('#basemap').addEventListener('change', e => setBasemap(e.target.value));
-$('#baseOpacity').addEventListener('input', e => { if (baseLayer) baseLayer.setOpacity(+e.target.value); });
+$('#baseOpacity').addEventListener('input', e => { if (baseLayer) baseLayer.setOpacity(+e.target.value); if (refLayer) refLayer.setOpacity(+e.target.value); });
 $('#baseOpacity').addEventListener('change', save);
 $('#overlays').innerHTML = Object.entries(OVERLAYS).map(([k,v]) =>
   `<label class="check"><input type="checkbox" id="ov-${k}"> ${v.name}<span class="tag">${v.tag}</span></label>`).join('');
