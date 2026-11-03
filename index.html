@@ -93,6 +93,9 @@ a{color:var(--accent)}
 .results button{width:100%;text-align:left;border:0;background:transparent;padding:8px 10px;font-size:13px;line-height:1.3}
 .results button:hover{background:var(--panel-2)}
 .results .sub{display:block;color:var(--muted);font-size:11.5px;margin-top:2px}
+.results .local button{display:grid;grid-template-columns:auto 1fr;column-gap:8px;align-items:center}
+.results .local .sub{grid-column:2}
+.results .local .dot{width:9px;height:9px;border-radius:50%;background:var(--sw);display:inline-block}
 
 /* color swatches */
 .swatches{display:flex;gap:6px;flex-wrap:wrap}
@@ -215,7 +218,7 @@ footer.about{padding-block:10px 0;font-size:11.5px;color:var(--muted);line-heigh
 
     <div class="section">
       <div class="search">
-        <input id="q" type="search" placeholder="Search a place, address, or “39.78, -104.69”" autocomplete="off" aria-label="Search">
+        <input id="q" type="search" placeholder="Search sites, parcels, places, or “39.78, -104.69”" autocomplete="off" aria-label="Search">
         <button class="go" id="qGo" title="Search" aria-label="Search">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
         </button>
@@ -683,7 +686,7 @@ function addEditable(features){
 function addDataset(name, fc, color, visible = true){
   const id = uid(); color = safeColor(color); name = safeText(name, 200) || 'Layer';
   fc = { type:'FeatureCollection', features:toFeatures(fc) };
-  const points = [];
+  const points = [], items = [];
   const portfolio = fc.features.some(f => stageOf(f.properties));
   const colorFor = f => portfolio && stageOf(f.properties) ? STAGE[stageOf(f.properties)].c : color;
   const geo = L.geoJSON(fc, {
@@ -694,19 +697,20 @@ function addDataset(name, fc, color, visible = true){
       const nm = f.properties && (f.properties.name || f.properties.Name || f.properties.title);
       if (nm) l.bindTooltip(String(nm), { direction:'top', className:'oms-tip', sticky:f.geometry.type !== 'Point' });
       if (f.geometry.type === 'Point') points.push(l);
+      items.push({ f, l });
     },
   });
   const stages = portfolio ? [...new Set(fc.features.map(f => stageOf(f.properties)).filter(Boolean))] : [];
   let bounds = null; try { bounds = geo.getBounds(); } catch {}
-  let layer = geo;
+  let layer = geo, cluster = null;
   if (points.length > 60 && L.markerClusterGroup){
-    const cluster = L.markerClusterGroup({ showCoverageOnHover:false, maxClusterRadius:48, spiderfyOnMaxZoom:true,
+    cluster = L.markerClusterGroup({ showCoverageOnHover:false, maxClusterRadius:48, spiderfyOnMaxZoom:true,
       iconCreateFunction:c => L.divIcon({ className:'cluster', iconSize:[36,36], html:`<span style="--sw:${color}">${c.getChildCount()}</span>` }) });
     points.forEach(l => { geo.removeLayer(l); cluster.addLayer(l); });
     layer = L.layerGroup([geo, cluster]);
   }
   if (visible) layer.addTo(map);
-  datasets.push({ id, name, fc, layer, visible, color, bounds, count:fc.features.length, stages });
+  datasets.push({ id, name, fc, layer, visible, color, bounds, count:fc.features.length, stages, items, cluster });
   renderList(); save();
   return datasets[datasets.length - 1];
 }
@@ -988,30 +992,66 @@ $('#themeBtn').addEventListener('click', () => {
 });
 
 /* ---------------- search (Nominatim) ---------------- */
-let searchTimer = null, lastQuery = '';
+let searchTimer = null, lastQuery = '', localHtml = '', remoteHtml = '', lastLocal = [];
 const results = $('#results');
+const render = () => { results.innerHTML = localHtml + remoteHtml; };
 function parseLatLng(q){ const m = q.match(/^\s*(-?\d{1,2}(?:\.\d+)?)\s*[,;\s]\s*(-?\d{1,3}(?:\.\d+)?)\s*$/); if (!m) return null; const lat = +m[1], lng = +m[2]; return Math.abs(lat) <= 90 && Math.abs(lng) <= 180 ? L.latLng(lat, lng) : null; }
+
+/* On-map search: everything drawn or imported is matched by name, id, seller, owner, parcel id, address and so on. */
+const SEARCH_KEYS = ['name','id','deal','dealName','seller','owner','apn','address','city','county','state','lead','file','use','notes'];
+function localMatches(q){
+  const t = q.toLowerCase(); if (t.length < 2) return [];
+  const hitKey = p => { if (!p) return null; for (const k of SEARCH_KEYS){ const v = p[k]; if (v != null && String(v).toLowerCase().includes(t)) return k; } return null; };
+  const out = [];
+  drawn.getLayers().forEach(l => { const k = hitKey(l.feature.properties); if (k) out.push({ kind:'drawn', layer:l, p:l.feature.properties, hit:k, where:'Drawn on this map' }); });
+  datasets.forEach(d => (d.items || []).forEach(({ f, l }) => { const k = hitKey(f.properties); if (k) out.push({ kind:'ds', d, f, layer:l, p:f.properties, hit:k, where:d.name }); }));
+  const rank = m => { const n = String(m.p.name || '').toLowerCase(); return n === t ? 0 : n.startsWith(t) ? 1 : m.hit === 'name' ? 2 : m.hit === 'id' || m.hit === 'deal' || m.hit === 'apn' ? 3 : 4; };
+  out.sort((a, b) => rank(a) - rank(b));
+  return out.slice(0, 8);
+}
+function renderLocal(q){
+  lastLocal = localMatches(q);
+  localHtml = lastLocal.map((m, i) => { const p = m.p; const title = p.name || p.dealName || p.owner || p.apn || p.id || 'Feature';
+    const detail = [m.hit !== 'name' && m.hit !== 'dealName' ? `${m.hit === 'apn' ? 'parcel id' : m.hit}: ${String(p[m.hit]).slice(0, 60)}` : (p.dealName && p.dealName !== p.name ? p.dealName : ''), p.id && m.hit !== 'id' ? p.id : '', stageOf(p) ? STAGE[stageOf(p)].l : '', m.where].filter(Boolean).join(' · ');
+    return `<li class="local"><button data-local="${i}"><span class="dot" style="--sw:${esc(stageOf(p) ? STAGE[stageOf(p)].c : (p.color || m.d && m.d.color || currentColor))}"></span>${esc(title)}<span class="sub">${esc(detail)}</span></button></li>`; }).join('');
+}
+function focusMatch(m){
+  const l = m.layer;
+  if (m.kind === 'drawn'){ zoomTo(l); setTimeout(() => openEditor(l), 250); return; }
+  const open = () => { try { l.openPopup(); } catch {} };
+  if (m.d.cluster && m.d.cluster.hasLayer(l)){ if (!m.d.visible){ m.d.visible = true; m.d.layer.addTo(map); renderList(); } m.d.cluster.zoomToShowLayer(l, open); return; }
+  if (!m.d.visible){ m.d.visible = true; m.d.layer.addTo(map); renderList(); save(); }
+  if (l.getBounds) map.fitBounds(l.getBounds(), { padding:[40,40], maxZoom:17 }); else map.setView(l.getLatLng(), Math.max(map.getZoom(), 15));
+  setTimeout(open, 300);
+}
 async function search(q){
-  q = q.trim(); if (!q){ results.innerHTML = ''; return; }
+  q = q.trim(); if (!q){ localHtml = remoteHtml = ''; lastLocal = []; render(); return; }
+  renderLocal(q);
   const ll = parseLatLng(q);
-  if (ll){ results.innerHTML = `<li><button data-lat="${ll.lat}" data-lng="${ll.lng}" data-z="15">Go to ${fmtLL(ll)}<span class="sub">coordinates</span></button></li>`; return; }
-  if (privacyOn()){ results.innerHTML = '<li><button disabled>Place search is off in privacy mode. Paste coordinates instead.</button></li>'; return; }
-  if (q === lastQuery) return; lastQuery = q;
-  results.innerHTML = '<li><button disabled>Searching…</button></li>';
+  if (ll){ remoteHtml = `<li><button data-lat="${ll.lat}" data-lng="${ll.lng}" data-z="15">Go to ${fmtLL(ll)}<span class="sub">coordinates</span></button></li>`; render(); return; }
+  if (privacyOn()){ remoteHtml = lastLocal.length ? '' : '<li><button disabled>Nothing on the map matches. Place search is off in privacy mode.</button></li>'; render(); return; }
+  if (q === lastQuery){ render(); return; } lastQuery = q;
+  remoteHtml = '<li><button disabled>Searching places…</button></li>'; render();
   try {
     const r = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&addressdetails=0&q=${encodeURIComponent(q)}`, { headers:{ Accept:'application/json' } });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const hits = await r.json();
     if (q !== lastQuery) return;
-    results.innerHTML = hits.length ? hits.map(h => { const [s, n, w, e] = h.boundingbox.map(Number); const nm = h.display_name.split(', ');
-      return `<li><button data-lat="${h.lat}" data-lng="${h.lon}" data-bb="${s},${w},${n},${e}" data-name="${esc(nm[0])}">${esc(nm[0])}<span class="sub">${esc(nm.slice(1).join(', '))}${h.type ? ` · ${esc(h.type)}` : ''}</span></button></li>`; }).join('')
-      : '<li><button disabled>No results</button></li>';
-  } catch (e){ results.innerHTML = `<li><button disabled>Search failed (${esc(e.message)}). Try again in a moment.</button></li>`; lastQuery = ''; }
+    remoteHtml = hits.length ? hits.map(h => { const [s, n, w, e] = h.boundingbox.map(Number); const nm = h.display_name.split(', ');
+      return `<li><button data-lat="${h.lat}" data-lng="${h.lon}" data-bb="${s},${w},${n},${e}" data-name="${esc(nm[0])}">${esc(nm[0])}<span class="sub">${esc(nm.slice(1).join(', '))}${h.type ? ` · ${esc(h.type)}` : ''} · place</span></button></li>`; }).join('')
+      : (lastLocal.length ? '' : '<li><button disabled>No results</button></li>');
+    render();
+  } catch (e){ remoteHtml = `<li><button disabled>Place search failed (${esc(e.message)}). Try again in a moment.</button></li>`; lastQuery = ''; render(); }
 }
 $('#q').addEventListener('input', e => { clearTimeout(searchTimer); searchTimer = setTimeout(() => search(e.target.value), 450); });
-$('#q').addEventListener('keydown', e => { if (e.key === 'Enter'){ clearTimeout(searchTimer); lastQuery = ''; search(e.target.value); } });
+$('#q').addEventListener('keydown', e => {
+  if (e.key === 'Enter'){ clearTimeout(searchTimer); if (lastLocal.length && !parseLatLng(e.target.value)){ focusMatch(lastLocal[0]); results.innerHTML = ''; localHtml = remoteHtml = ''; return; } lastQuery = ''; search(e.target.value); }
+  if (e.key === 'Escape'){ results.innerHTML = ''; localHtml = remoteHtml = ''; e.target.blur(); }
+});
 $('#qGo').addEventListener('click', () => { lastQuery = ''; search($('#q').value); });
 results.addEventListener('click', e => {
+  const lb = e.target.closest('button[data-local]');
+  if (lb){ const m = lastLocal[+lb.dataset.local]; if (m) focusMatch(m); results.innerHTML = ''; localHtml = remoteHtml = ''; return; }
   const b = e.target.closest('button[data-lat]'); if (!b) return;
   const ll = L.latLng(+b.dataset.lat, +b.dataset.lng);
   if (b.dataset.bb){ const [s, w, n, ee] = b.dataset.bb.split(',').map(Number); map.fitBounds([[s, w], [n, ee]], { maxZoom:17 }); } else map.setView(ll, +b.dataset.z || 15);
