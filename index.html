@@ -413,6 +413,14 @@ const PARCEL_SOURCES = [
   { name:'Arkansas (statewide)', bbox:[-94.62,33.00,-89.64,36.50], url:'https://gis.arkansas.gov/arcgis/rest/services/FEATURESERVICES/Planning_Cadastre/FeatureServer/6', max:200, fields:{ owner:'ownername', apn:'parcelid', acres:'taxarea', address:'adrlabel', use:'parceltype' } },
   { name:'Maricopa County, AZ', bbox:[-113.34,32.50,-111.04,34.05], url:'https://gis.maricopa.gov/arcgis/rest/services/IndividualService/Parcel/MapServer/1', fields:{ owner:'OwnerName', apn:'APN', acres:'LotSize_Acre', address:'PropertyFullStreetAddress', use:'PropertyUseDescription' } },
   { name:'Cook County, IL', bbox:[-88.27,41.47,-87.52,42.16], url:'https://gis.cookcountyil.gov/traditional/rest/services/CookViewer3Parcels/MapServer/0', fields:{ apn:'PIN14', acresSqft:'LANDSF', address:'street_address', use:'class_info_display' } },
+  // Texas appraisal districts. An array for address joins the parts; acres given as text ("45.170 AC") are parsed.
+  { name:'Bastrop CAD, TX', bbox:[-97.67,29.90,-96.96,30.46], url:'https://services3.arcgis.com/wdTkTU0MdZbNBEZy/ArcGIS/rest/services/ParcelARI/FeatureServer/0', max:1000, fields:{ owner:'file_as_name', apn:'prop_id', acres:'legal_acreage', address:['situs_num','situs_street_prefx','situs_street','situs_street_sufix','situs_city'] } },
+  { name:'Caldwell CAD, TX', bbox:[-97.90,29.57,-97.33,30.08], url:'https://services.arcgis.com/rVxY74DxxIDrDbc0/arcgis/rest/services/CaldwellCADWebService/FeatureServer/0', fields:{ owner:'file_as_name', apn:'prop_id', acres:'legal_acreage', address:['situs_num','situs_street_prefx','situs_street','situs_street_sufix','situs_city'] } },
+  { name:'Dallas County, TX', bbox:[-97.05,32.54,-96.52,33.02], url:'https://services3.arcgis.com/zqe2kwz79KUqUvxC/arcgis/rest/services/DCAD_PARCELS/FeatureServer/0', fields:{ owner:'OWNER_NAME1', apn:'ACCOUNT_NUM', acres:'RecAcs', address:'SiteAddress', use:'DIVISION_CD' } },
+  { name:'Tarrant County, TX', bbox:[-97.55,32.55,-97.03,33.00], url:'https://mapit.tarrantcounty.com/arcgis/rest/services/Dynamic/TADParcels/MapServer/0', fields:{ owner:'OWNER_NAME', apn:'ACCOUNT', acres:'LAND_ACRES', address:'SITUS_ADDR', use:'DESCR' } },
+  { name:'Somervell CAD, TX', bbox:[-97.95,32.11,-97.60,32.40], url:'https://services6.arcgis.com/j94FvPaik4etwHFk/arcgis/rest/services/SomervellCADWebService/FeatureServer/0', fields:{ owner:'file_as_name', apn:'prop_id', acres:'legal_acreage', address:['situs_num','situs_street_prefx','situs_street','situs_street_sufix','situs_city'] } },
+  { name:'Wheeler CAD, TX', bbox:[-100.55,35.03,-100.00,35.63], url:'https://gisdata.pandai.com/pamaps02/rest/services/Wheeler/WheelerCADPublic/MapServer/0', noPaging:true, fields:{ owner:'WheelerCADWeb.DBO.Accounts.Owner_Name', apn:'WheelerCADWeb.DBO.Accounts.Account', acres:'WheelerCADWeb.DBO.Accounts.Acres', address:['WheelerCADWeb.DBO.Accounts.Prop_Street_Number','WheelerCADWeb.DBO.Accounts.Prop_Street_Dir','WheelerCADWeb.DBO.Accounts.Prop_Street','WheelerCADWeb.DBO.Accounts.Prop_Street_Suffix','WheelerCADWeb.DBO.Accounts.Prop_City'], use:'WheelerCADWeb.DBO.Accounts.Primary_Category_Code' } },
+  { name:'Johnson County, TX', bbox:[-97.62,32.20,-97.08,32.56], url:'https://services5.arcgis.com/3ldvXzwJjobPzrfv/arcgis/rest/services/Johnson_County_Parcels/FeatureServer/1', fields:{ owner:'NAME', apn:'ACCOUNT_NU', acres:'EFF_ACRES_', address:'SITUS', use:'LAND_PTD' } },
 ];
 const PARCEL_MIN_ZOOM = 14;
 let parcelsOn = false, parcelLayer = null, parcelAbort = null, parcelTimer = null;
@@ -428,8 +436,12 @@ function esriToGeoJSON(j){
     geometry: f.geometry.rings.length === 1 ? { type:'Polygon', coordinates:f.geometry.rings } : { type:'MultiPolygon', coordinates:f.geometry.rings.map(r => [r]) } })) };
 }
 function normalizeParcel(p, s){
-  const f = s.fields || {}; const get = k => f[k] ? p[f[k]] : undefined;
+  const f = s.fields || {};
+  const get = k => { const spec = f[k]; if (!spec) return undefined;
+    if (Array.isArray(spec)){ const parts = spec.map(n => p[n]).filter(v => v != null && String(v).trim() !== ''); return parts.length ? parts.join(' ').replace(/\s+/g, ' ').trim() : undefined; }
+    return p[spec]; };
   const out = { owner:get('owner'), apn:get('apn'), acres:get('acres'), address:get('address'), use:get('use'), source:s.name };
+  if (typeof out.acres === 'string'){ const n = parseFloat(out.acres.replace(/,/g, '')); out.acres = Number.isFinite(n) ? n : undefined; }
   if (out.acres == null && f.acresSqft && Number.isFinite(+p[f.acresSqft]) && +p[f.acresSqft] > 0) out.acres = +(+p[f.acresSqft] / 43560).toFixed(2);
   Object.keys(out).forEach(k => { if (out[k] === undefined || out[k] === null || out[k] === '') delete out[k]; });
   if (!out.owner && !out.apn) Object.assign(out, p);   // unmapped source: keep raw attributes
@@ -446,9 +458,9 @@ async function refreshParcels(){
   const feats = []; let truncated = false; const failed = [];
   await Promise.all(srcs.map(async s => {
     try {
-      const outFields = Object.values(s.fields || {}).filter(Boolean).join(',') || '*';
+      const outFields = [...new Set(Object.values(s.fields || {}).flat().filter(Boolean))].join(',') || '*';
       const fmt = s.format === 'esrijson' ? 'json' : 'geojson';
-      const qs = `where=1%3D1&geometry=${env}&geometryType=esriGeometryEnvelope&inSR=4326&outSR=4326&spatialRel=esriSpatialRelIntersects&outFields=${encodeURIComponent(outFields)}&returnGeometry=true&geometryPrecision=6&resultRecordCount=${s.max || 2000}&f=${fmt}`;
+      const qs = `where=1%3D1&geometry=${env}&geometryType=esriGeometryEnvelope&inSR=4326&outSR=4326&spatialRel=esriSpatialRelIntersects&outFields=${encodeURIComponent(outFields)}&returnGeometry=true&geometryPrecision=6${s.noPaging ? '' : `&resultRecordCount=${s.max || 2000}`}&f=${fmt}`;
       const r = await fetch(`${s.url}/query?${qs}`, { signal:ctl.signal });
       const j = await r.json();
       if (j.error) throw new Error(j.error.message || 'query error');

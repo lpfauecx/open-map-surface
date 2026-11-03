@@ -81,8 +81,15 @@ The live parcel overlay reads public ArcGIS REST layers published by county audi
 | Arkansas, statewide | Arkansas GIS Office cadastre | server caps at 200 parcels per query; zoom in |
 | Maricopa County, AZ | county GIS assessor parcels | full schema |
 | Cook County, IL | county GIS assessor parcels | no owner names by county policy; acres from land sq ft |
+| Bastrop CAD, TX | appraisal district hosted feature service | owner, prop id, legal acreage, situs |
+| Caldwell CAD, TX | appraisal district hosted feature service | same schema as Bastrop |
+| Dallas County, TX | county GIS mirror of DCAD parcels | appraisal year 2023 vintage; acres parsed from text |
+| Tarrant County, TX | county GIS map service of TAD parcels | full schema, current |
+| Somervell CAD, TX | appraisal district hosted feature service | same schema as Bastrop |
+| Wheeler CAD, TX | appraisal district map service (Pritchard & Abbott) | no paging support; joined field names |
+| Johnson County, TX | third-party hosted copy, 2026 appraisal | the official CAD layer is geometry-only |
 
-Not available as a public ArcGIS layer: Perry County, AL (Flagship/MapGuide viewer only).
+Not available as a public ArcGIS layer: Perry County, AL (Flagship/MapGuide viewer only). Texas's statewide StratMap parcel service advertises query support but rejects every query, so it is not used.
 
 ## Usage notes on the free services
 
