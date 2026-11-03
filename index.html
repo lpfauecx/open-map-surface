@@ -308,7 +308,7 @@ const $$ = s => [...document.querySelectorAll(s)];
 const STORE_KEY = 'open-map-surface.v1';
 const THEME_KEY = 'open-map-surface.theme';
 const MAX_EDITABLE = 400;            // bigger imports become read-only dataset layers (clustered)
-const MAX_LINK_CHARS = 250000;       // refuse share links bigger than this (keeps a hostile link from hanging the tab)
+const MAX_LINK_CHARS = 1500000;      // refuse share links bigger than this (keeps a hostile link from hanging the tab)
 const MAX_LINK_FEATURES = 20000;
 const PRIV_KEY = 'open-map-surface.privacy';
 const COLORS = ['#0b6e4f','#d9480f','#1c64f2','#9333ea','#c2185b','#b45309','#0e7490','#374151'];
@@ -1065,16 +1065,29 @@ $('#shareBtn').addEventListener('click', () => {
   if (url.length > 8000) copy(url, `Link copied (${(url.length/1024).toFixed(0)} KB, ${n} features). Very long links get cut by some chat apps; export GeoJSON for big datasets.`, 6000);
   else copy(url, `Share link copied · ${n} feature${n === 1 ? '' : 's'}, ${BASEMAPS[currentBase].name}`);
 });
+/* Links: #d=… replaces the whole map (a shared map); #add=… appends its features and layers to whatever is already here. */
 function readHash(){
-  const h = location.hash; if (!h.startsWith('#d=')) return null;
-  if (h.length > MAX_LINK_CHARS){ toast(`This share link is too large to open (${(h.length/1024).toFixed(0)} KB). Ask for a GeoJSON file instead.`, 6000); return null; }
+  const m = location.hash.match(/^#(d|add)=(.+)$/); if (!m) return null;
+  if (location.hash.length > MAX_LINK_CHARS){ toast(`This share link is too large to open (${(location.hash.length/1024).toFixed(0)} KB). Ask for a GeoJSON file instead.`, 6000); return null; }
   try {
-    const json = LZString.decompressFromEncodedURIComponent(h.slice(3));
+    const json = LZString.decompressFromEncodedURIComponent(m[2]);
     if (!json || json.length > MAX_LINK_CHARS * 40) return null;
-    const s = JSON.parse(json); return s && typeof s === 'object' && !Array.isArray(s) ? s : null;
+    const s = JSON.parse(json); return s && typeof s === 'object' && !Array.isArray(s) ? { mode:m[1], snap:s } : null;
   } catch { return null; }
 }
-window.addEventListener('hashchange', () => { const s = readHash(); if (s){ applySnapshot(s); toast('Loaded shared map'); } });
+function mergeSnapshot(s){
+  const feats = toFeatures(s.features); const ds = (Array.isArray(s.datasets) ? s.datasets : []).filter(d => d && typeof d === 'object');
+  const total = feats.length + ds.reduce((n, d) => n + toFeatures(d.fc).length, 0);
+  if (total > MAX_LINK_FEATURES) throw new Error(`too many features (${total})`);
+  suppressSave = true;
+  try { addEditable(feats); ds.forEach(d => addDataset(d.name, d.fc, d.color, d.visible !== false)); } finally { suppressSave = false; }
+  renderList(); save(); fitAll();
+  history.replaceState(null, '', location.pathname + location.search);   // drop the fragment so a reload does not add it twice
+  return total;
+}
+window.addEventListener('hashchange', () => { const r = readHash(); if (!r) return;
+  if (r.mode === 'add'){ try { const n = mergeSnapshot(r.snap); toast(`Added ${n} feature${n === 1 ? '' : 's'} from the link`); } catch (e){ toast(`Could not add from link: ${e.message}`); } }
+  else { applySnapshot(r.snap); toast('Loaded shared map'); } });
 
 /* ---------------- helpers ---------------- */
 let toastTimer;
@@ -1099,13 +1112,15 @@ const SAMPLE = { v:1, view:[39.7865, -104.6880, 13], base:'osm', overlays:[], se
 ] } };
 (function boot(){
   const blank = location.hash === '#blank';                        // app shortcut "New blank map"
-  const fromLink = blank ? null : readHash(); let snap = fromLink;
+  const link = blank ? null : readHash();
+  const fromLink = link && link.mode === 'd' ? link.snap : null; let snap = fromLink;
   if (blank) snap = Object.assign({}, SAMPLE, { features:{ type:'FeatureCollection', features:[] }, seq:0 });
   if (!snap){ try { snap = JSON.parse(localStorage.getItem(STORE_KEY)); } catch {} }
   const first = !snap; if (!snap) snap = SAMPLE;
   try { applySnapshot(snap); } catch (e){ console.error(e); applySnapshot(SAMPLE); }
   $('#zoomLbl').textContent = `z ${map.getZoom()}`;
-  if (fromLink) toast('Loaded a shared map from the link');
+  if (link && link.mode === 'add'){ try { const n = mergeSnapshot(link.snap); toast(`Added ${n} feature${n === 1 ? '' : 's'} from the link`, 4000); } catch (e){ toast(`Could not add from link: ${e.message}`); } }
+  else if (fromLink) toast('Loaded a shared map from the link');
   else if (first) toast('Welcome. The shapes shown are examples; clear them and start drawing.', 4000);
 })();
 
