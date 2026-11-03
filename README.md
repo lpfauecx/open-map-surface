@@ -14,7 +14,8 @@ Built on [Leaflet](https://leafletjs.com) + [OpenStreetMap](https://www.openstre
 - **Overlays:** place labels and boundaries, roads, hillshade, FEMA flood hazard zones (US, WMS).
 - **Draw:** pins, lines, areas, rectangles, radius circles. Edit vertices, drag shapes, erase. Eight colors.
 - **Measure:** every shape reports its size in site-work units. Areas in acres and hectares (plus km² when large), lengths in km and miles, pins as decimal degrees.
-- **Import:** GeoJSON, KML and CSV (needs `lat`/`lon`-style columns). Drag a file onto the page or click the drop zone. Imports over 400 features load as a clustered read-only layer.
+- **Import:** GeoJSON, KML, KMZ and CSV (needs `lat`/`lon`-style columns). Drag a file onto the page or click the drop zone. KMZ is unzipped in the browser (no upload). Imports over 400 features load as a clustered read-only layer.
+- **County parcels (live):** an overlay that queries public county ArcGIS parcel services for whatever is in view once you zoom to level 14 or closer. Hover highlights a parcel; click shows owner, parcel id, acreage and address, with **Add to map** to copy the boundary into an editable shape you can name, color, measure and share. Coverage is the list in `PARCEL_SOURCES` near the top of the script (see **County parcels** below); outside those counties the status line says so. Nothing is cached or sent anywhere: each pan issues a fresh query straight from your browser to the county's own server.
 - **Portfolio layers:** an imported GeoJSON whose features carry a `stage` property (`closed`, `pending`, `hard`, `dd`, `loi`, `lease`, `option`, `future`) is colored by stage with a legend, and each feature opens a deal card instead of a raw attribute table. Recognized fields: `name`, `id`, `lead`, `seller`, `address`, `city`, `county`, `state`, `acres`, `mw`, `price`, `priceNote`, `emd`, `emdNote`, `loi`, `psa`, `ipEnd`, `excl`, `closing`, `nextDate`, `nextLabel`, `status`, `next`, `notesDate`. Polygons with `approx: true` draw dashed. Keep such files out of a public repository: this repo ignores a `private/` folder for exactly that purpose, and the map never stores imported data anywhere but your own browser or a share link you create.
 - **Export:** GeoJSON, KML (circles become polygons) and CSV of points. Copy GeoJSON to the clipboard.
 - **Share:** "Copy share link" compresses the view, basemap, overlays and every drawn feature into the URL. Whoever opens the link sees the same map.
@@ -65,6 +66,23 @@ Everything is in `index.html`:
 - `icons/icon.svg`: the app icon. Regenerate the PNGs from it at 192, 512 (and a 512 with 10% padding for the maskable one) after editing.
 - `manifest.webmanifest`: app name, colors and shortcuts. `sw.js`: bump `VERSION` whenever you ship a change.
 - The `:root` block in `<style>`: colors, fonts, radius.
+
+## County parcels
+
+The live parcel overlay reads public ArcGIS REST layers published by county auditors, assessors and state GIS offices. Each entry in `PARCEL_SOURCES` (top of the script) gives the layer URL, a rough county envelope, and which attribute holds owner, parcel id, acreage, address and land use. Add a county by appending one entry; the overlay only queries sources whose envelope intersects the view, so there is no cost to a long list. All of these were verified in November 2026 with envelope queries; schemas change, so if a county stops answering, check the layer's `?f=json` page.
+
+| Source | Layer | Notes |
+|---|---|---|
+| Pickaway County, OH | county auditor hosted feature service | owner, parcel id, acres, address |
+| Delaware County, OH | county auditor hosted feature service | no parcel-id column; land-use class code |
+| Licking County, OH | county auditor ArcGIS Enterprise | full schema incl. land use |
+| Franklin County, OH | county auditor map service | full schema |
+| Indiana, statewide | IndianaMap current parcels | no owner, no acreage (the popup shows measured acres) |
+| Arkansas, statewide | Arkansas GIS Office cadastre | server caps at 200 parcels per query; zoom in |
+| Maricopa County, AZ | county GIS assessor parcels | full schema |
+| Cook County, IL | county GIS assessor parcels | no owner names by county policy; acres from land sq ft |
+
+Not available as a public ArcGIS layer: Perry County, AL (Flagship/MapGuide viewer only).
 
 ## Usage notes on the free services
 

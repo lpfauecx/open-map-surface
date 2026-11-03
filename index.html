@@ -248,14 +248,16 @@ footer.about{padding-block:10px 0;font-size:11.5px;color:var(--muted);line-heigh
       <select id="basemap" aria-label="Basemap"></select>
       <div class="slider"><span>Opacity</span><input id="baseOpacity" type="range" min="0.2" max="1" step="0.05" value="1"></div>
       <div id="overlays" style="margin-top:8px"></div>
+      <label class="check"><input type="checkbox" id="ov-parcels"> County parcels (live)<span class="tag">ArcGIS</span></label>
+      <p class="hint" id="parcelStatus" style="margin-top:2px" hidden></p>
     </div>
 
     <div class="section">
       <h2>On the map <span class="count" id="featCount">0</span></h2>
       <ul id="featureList"></ul>
       <label class="drop" id="drop" for="fileInput">
-        Drop GeoJSON, KML or CSV here, or click to choose
-        <input id="fileInput" type="file" accept=".geojson,.json,.kml,.csv,.txt" multiple>
+        Drop GeoJSON, KML, KMZ or CSV here, or click to choose
+        <input id="fileInput" type="file" accept=".geojson,.json,.kml,.kmz,.csv,.txt" multiple>
       </label>
       <div class="row" style="margin-top:8px">
         <button class="btn small" id="exportGeo">Export GeoJSON</button>
@@ -397,7 +399,101 @@ function setOverlay(key, on){
   const cb = $(`#ov-${key}`); if (cb) cb.checked = !!on;
   save();
 }
-const activeOverlays = () => Object.keys(overlayLayers);
+const activeOverlays = () => Object.keys(overlayLayers).concat(parcelsOn ? ['parcels'] : []);
+
+/* ---------------- live county parcels (public ArcGIS REST layers, queried for the current view) ---------------- */
+// Each source: a public FeatureServer/MapServer layer, its rough bbox [w,s,e,n], and which fields hold owner / parcel id / acres / address.
+const PARCEL_SOURCES = [
+  // Verified Nov 2026 with envelope queries (f=geojson). bbox is a generous county envelope [w,s,e,n] used only to pick sources for the view.
+  { name:'Pickaway County, OH', bbox:[-83.27,39.43,-82.74,39.80], url:'https://services6.arcgis.com/FhJ42byMw3LmPYCN/arcgis/rest/services/Parcels_Search/FeatureServer/1', fields:{ owner:'OWNER', apn:'PARCELID', acres:'PPAcres', address:'ADDRESS' } },
+  { name:'Delaware County, OH', bbox:[-83.25,40.15,-82.75,40.47], url:'https://services2.arcgis.com/ziXVKVy3BiopMCCU/arcgis/rest/services/Parcel/FeatureServer/0', fields:{ owner:'OWNER1', acres:'ACRES', address:'ADDR1', use:'CLASS' } },
+  { name:'Licking County, OH', bbox:[-82.78,39.88,-82.18,40.31], url:'https://gis.lickingcounty.gov/server/rest/services/Auditor/Parcels/FeatureServer/0', fields:{ owner:'OwnerName', apn:'Parcel', acres:'TaxAcres', address:'SiteAddress', use:'Landuse' } },
+  { name:'Franklin County, OH', bbox:[-83.26,39.80,-82.76,40.16], url:'https://gis.franklincountyohio.gov/hosting/rest/services/ParcelFeatures/Parcel_Features/MapServer/0', fields:{ owner:'OWNERNME1', apn:'PARCELID', acres:'ACRES', address:'SITEADDRESS', use:'CLASSDSCRP' } },
+  { name:'Indiana (statewide)', bbox:[-88.10,37.77,-84.78,41.77], url:'https://gisdata.in.gov/server/rest/services/Hosted/Parcel_Boundaries_of_Indiana_Current/FeatureServer/0', fields:{ apn:'parcel_id', address:'dlgf_prop_address', use:'dlgf_prop_class_code' } },
+  { name:'Arkansas (statewide)', bbox:[-94.62,33.00,-89.64,36.50], url:'https://gis.arkansas.gov/arcgis/rest/services/FEATURESERVICES/Planning_Cadastre/FeatureServer/6', max:200, fields:{ owner:'ownername', apn:'parcelid', acres:'taxarea', address:'adrlabel', use:'parceltype' } },
+  { name:'Maricopa County, AZ', bbox:[-113.34,32.50,-111.04,34.05], url:'https://gis.maricopa.gov/arcgis/rest/services/IndividualService/Parcel/MapServer/1', fields:{ owner:'OwnerName', apn:'APN', acres:'LotSize_Acre', address:'PropertyFullStreetAddress', use:'PropertyUseDescription' } },
+  { name:'Cook County, IL', bbox:[-88.27,41.47,-87.52,42.16], url:'https://gis.cookcountyil.gov/traditional/rest/services/CookViewer3Parcels/MapServer/0', fields:{ apn:'PIN14', acresSqft:'LANDSF', address:'street_address', use:'class_info_display' } },
+];
+const PARCEL_MIN_ZOOM = 14;
+let parcelsOn = false, parcelLayer = null, parcelAbort = null, parcelTimer = null;
+map.createPane('parcels'); map.getPane('parcels').style.zIndex = 350;   // above tiles, below drawn shapes
+const PARCEL_STYLE = { color:'#6b7280', weight:1, opacity:.9, fillColor:'#6b7280', fillOpacity:.04 };
+const PARCEL_HOVER = { color:'#111827', weight:2.5, fillOpacity:.12 };
+function setParcelStatus(msg){ const el = $('#parcelStatus'); el.hidden = !msg; el.textContent = msg || ''; }
+function clearParcels(){ if (parcelLayer){ map.removeLayer(parcelLayer); parcelLayer = null; } }
+function parcelSourcesInView(b){ return PARCEL_SOURCES.filter(s => b.getWest() < s.bbox[2] && b.getEast() > s.bbox[0] && b.getSouth() < s.bbox[3] && b.getNorth() > s.bbox[1]); }
+function esriToGeoJSON(j){
+  return { type:'FeatureCollection', features:(j.features || []).filter(f => f.geometry && f.geometry.rings).map(f => ({
+    type:'Feature', properties:f.attributes || {},
+    geometry: f.geometry.rings.length === 1 ? { type:'Polygon', coordinates:f.geometry.rings } : { type:'MultiPolygon', coordinates:f.geometry.rings.map(r => [r]) } })) };
+}
+function normalizeParcel(p, s){
+  const f = s.fields || {}; const get = k => f[k] ? p[f[k]] : undefined;
+  const out = { owner:get('owner'), apn:get('apn'), acres:get('acres'), address:get('address'), use:get('use'), source:s.name };
+  if (out.acres == null && f.acresSqft && Number.isFinite(+p[f.acresSqft]) && +p[f.acresSqft] > 0) out.acres = +(+p[f.acresSqft] / 43560).toFixed(2);
+  Object.keys(out).forEach(k => { if (out[k] === undefined || out[k] === null || out[k] === '') delete out[k]; });
+  if (!out.owner && !out.apn) Object.assign(out, p);   // unmapped source: keep raw attributes
+  return out;
+}
+async function refreshParcels(){
+  if (!parcelsOn || !map._loaded) return;
+  const z = map.getZoom(), b = map.getBounds(), srcs = parcelSourcesInView(b);
+  if (z < PARCEL_MIN_ZOOM){ clearParcels(); setParcelStatus(srcs.length ? `Zoom in to ${PARCEL_MIN_ZOOM}+ to load ${srcs.map(s => s.name).join(', ')} parcels` : `Zoom in to ${PARCEL_MIN_ZOOM}+ over a covered county (${PARCEL_SOURCES.length} sources)`); return; }
+  if (!srcs.length){ clearParcels(); setParcelStatus('No public parcel source for this area yet'); return; }
+  if (parcelAbort) parcelAbort.abort(); const ctl = parcelAbort = new AbortController();
+  setParcelStatus(`Loading ${srcs.map(s => s.name).join(', ')}…`);
+  const env = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map(n => n.toFixed(6)).join(',');
+  const feats = []; let truncated = false; const failed = [];
+  await Promise.all(srcs.map(async s => {
+    try {
+      const outFields = Object.values(s.fields || {}).filter(Boolean).join(',') || '*';
+      const fmt = s.format === 'esrijson' ? 'json' : 'geojson';
+      const qs = `where=1%3D1&geometry=${env}&geometryType=esriGeometryEnvelope&inSR=4326&outSR=4326&spatialRel=esriSpatialRelIntersects&outFields=${encodeURIComponent(outFields)}&returnGeometry=true&geometryPrecision=6&resultRecordCount=${s.max || 2000}&f=${fmt}`;
+      const r = await fetch(`${s.url}/query?${qs}`, { signal:ctl.signal });
+      const j = await r.json();
+      if (j.error) throw new Error(j.error.message || 'query error');
+      const fc = fmt === 'geojson' ? j : esriToGeoJSON(j);
+      if (j.exceededTransferLimit || (j.properties && j.properties.exceededTransferLimit)) truncated = true;
+      (fc.features || []).forEach(f => { if (!f.geometry) return; f.properties = normalizeParcel(f.properties || {}, s); feats.push(f); });
+    } catch (e){ if (e.name !== 'AbortError') failed.push(s.name); }
+  }));
+  if (ctl.signal.aborted) return;
+  clearParcels();
+  parcelLayer = L.geoJSON({ type:'FeatureCollection', features:feats }, { pane:'parcels', style:() => PARCEL_STYLE,
+    onEachFeature:(f, l) => {
+      l.on('mouseover', () => l.setStyle(PARCEL_HOVER)); l.on('mouseout', () => parcelLayer && parcelLayer.resetStyle(l));
+      l.bindPopup(() => parcelPopup(f), { maxWidth:320 });
+    } }).addTo(map);
+  setParcelStatus(`${feats.length.toLocaleString()} parcels in view${truncated ? ' · server limit hit, zoom in for all' : ''}${failed.length ? ` · failed: ${failed.join(', ')}` : ''}`);
+}
+function parcelPopup(f){
+  const p = f.properties || {}; const el = document.createElement('div'); el.className = 'editor';
+  const known = ['owner','apn','acres','address','use','source'];
+  const rows = known.filter(k => p[k] != null && p[k] !== '').map(k => `<dt>${k === 'apn' ? 'parcel id' : k}</dt><dd>${esc(k === 'acres' && Number.isFinite(+p[k]) ? (+p[k]).toLocaleString(undefined, { maximumFractionDigits:2 }) + ' ac' : p[k])}</dd>`);
+  const extra = Object.keys(p).filter(k => !known.includes(k)).slice(0, 12).map(k => `<dt>${esc(k)}</dt><dd>${esc(p[k])}</dd>`);
+  let area = ''; try { area = fmtArea(turf.area(f)); } catch {}
+  el.innerHTML = `<b>${esc(p.owner || p.apn || 'Parcel')}</b><dl class="kv">${rows.concat(extra).join('')}${area ? `<dt>measured</dt><dd>${area}</dd>` : ''}</dl>
+    <div class="ed-actions"><button type="button" class="btn small primary" data-act="add">Add to map</button><button type="button" class="btn small" data-act="copy">Copy GeoJSON</button></div>
+    <div class="hint" style="margin:0">Live county data; add it to keep a copy you can edit, name and share.</div>`;
+  el.addEventListener('click', e => {
+    const act = e.target.closest('[data-act]')?.dataset.act; if (!act) return;
+    if (act === 'copy') copy(JSON.stringify(f, null, 2), 'Parcel GeoJSON copied');
+    if (act === 'add'){
+      const notes = [p.apn && `Parcel ${p.apn}`, p.acres && `${(+p.acres).toLocaleString(undefined, { maximumFractionDigits:2 })} ac`, p.address, p.use, p.source && `Source: ${p.source}`].filter(Boolean).join(' · ');
+      L.geoJSON(f).getLayers().forEach(l => register(l, { name:String(p.owner || p.apn || 'Parcel'), notes, color:currentColor, apn:p.apn, acres:p.acres, owner:p.owner }));
+      map.closePopup(); renderList(); save(); toast('Parcel added to the map. Draw more, rename it, or share.');
+    }
+  });
+  return el;
+}
+function setParcels(on){
+  parcelsOn = !!on; $('#ov-parcels').checked = parcelsOn;
+  if (!parcelsOn){ if (parcelAbort) parcelAbort.abort(); clearParcels(); setParcelStatus(''); }
+  else refreshParcels();
+  save();
+}
+$('#ov-parcels').addEventListener('change', e => setParcels(e.target.checked));
+map.on('moveend zoomend', () => { if (!parcelsOn) return; clearTimeout(parcelTimer); parcelTimer = setTimeout(refreshParcels, 350); });
 
 // panel widgets
 $('#basemap').innerHTML = Object.entries(BASEMAPS).map(([k,v]) => `<option value="${k}">${v.name}</option>`).join('');
@@ -687,13 +783,38 @@ function csvToGeoJSON(text){
   });
   return { type:'FeatureCollection', features };
 }
+/* KMZ = zip with a KML inside. Read the zip's central directory, inflate the first .kml entry (DecompressionStream, no library). */
+async function kmzToKml(buf){
+  const dv = new DataView(buf), u8 = new Uint8Array(buf), n = u8.length;
+  let eocd = -1; for (let i = n - 22; i >= Math.max(0, n - 65557); i--){ if (dv.getUint32(i, true) === 0x06054b50){ eocd = i; break; } }
+  if (eocd < 0) throw new Error('not a zip/KMZ file');
+  const count = dv.getUint16(eocd + 10, true); let off = dv.getUint32(eocd + 16, true);
+  const entries = [];
+  for (let i = 0; i < count && off + 46 <= n; i++){
+    if (dv.getUint32(off, true) !== 0x02014b50) break;
+    const method = dv.getUint16(off + 10, true), csize = dv.getUint32(off + 20, true), nameLen = dv.getUint16(off + 28, true), extraLen = dv.getUint16(off + 30, true), cmtLen = dv.getUint16(off + 32, true), lo = dv.getUint32(off + 42, true);
+    const name = new TextDecoder().decode(u8.subarray(off + 46, off + 46 + nameLen));
+    entries.push({ name, method, csize, lo }); off += 46 + nameLen + extraLen + cmtLen;
+  }
+  const kml = entries.find(e => /(^|\/)doc\.kml$/i.test(e.name)) || entries.find(e => /\.kml$/i.test(e.name));
+  if (!kml) throw new Error('no .kml inside the KMZ');
+  const lnameLen = dv.getUint16(kml.lo + 26, true), lextraLen = dv.getUint16(kml.lo + 28, true);
+  const start = kml.lo + 30 + lnameLen + lextraLen; const data = u8.subarray(start, start + kml.csize);
+  if (kml.method === 0) return new TextDecoder().decode(data);
+  if (kml.method !== 8) throw new Error(`unsupported zip compression (${kml.method})`);
+  if (typeof DecompressionStream !== 'function') throw new Error('this browser cannot unzip KMZ; import the KML inside instead');
+  const out = await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer();
+  return new TextDecoder().decode(out);
+}
 async function importFile(file){
   const ext = file.name.split('.').pop().toLowerCase();
-  if (ext === 'kmz'){ toast('KMZ is a zip. Unzip it and import the doc.kml inside.'); return; }
   let gj;
   try {
-    const text = await file.text();
-    gj = ext === 'kml' ? kmlToGeoJSON(text) : (ext === 'csv' || ext === 'txt') ? csvToGeoJSON(text) : JSON.parse(text);
+    if (ext === 'kmz') gj = kmlToGeoJSON(await kmzToKml(await file.arrayBuffer()));
+    else {
+      const text = await file.text();
+      gj = ext === 'kml' ? kmlToGeoJSON(text) : (ext === 'csv' || ext === 'txt') ? csvToGeoJSON(text) : JSON.parse(text);
+    }
   } catch (e){ toast(`Could not read ${file.name}: ${e.message}`); return; }
   const n = importGeo(gj, file.name);
   if (n) toast(`Imported ${n} feature${n === 1 ? '' : 's'} from ${file.name}${n > MAX_EDITABLE ? ' as a read-only layer' : ''}`);
@@ -908,6 +1029,7 @@ function applySnapshot(s){
     setBasemap(BASEMAPS[s.base] ? s.base : 'osm');
     const ov = Array.isArray(s.overlays) ? s.overlays : [];
     Object.keys(OVERLAYS).forEach(k => setOverlay(k, ov.includes(k)));
+    parcelsOn = ov.includes('parcels'); $('#ov-parcels').checked = parcelsOn;   // refreshed once the view is set below
     seq = Number.isInteger(s.seq) && s.seq >= 0 ? Math.min(s.seq, 1e6) : 0;
     const feats = toFeatures(s.features);
     const ds = (Array.isArray(s.datasets) ? s.datasets : []).filter(d => d && typeof d === 'object');
@@ -917,6 +1039,8 @@ function applySnapshot(s){
     ds.forEach(d => addDataset(d.name, d.fc, d.color, d.visible !== false));
     const v = Array.isArray(s.view) ? s.view.map(Number) : null;
     if (v && v.length === 3 && Math.abs(v[0]) <= 90 && Math.abs(v[1]) <= 180 && v[2] >= 0 && v[2] <= 22) map.setView([v[0], v[1]], v[2]); else fitAll();
+    if (!map._loaded) map.setView([38, -97], 4);
+    setParcels(parcelsOn);
   } finally { suppressSave = false; }
   renderList(); save();
 }
